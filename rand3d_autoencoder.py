@@ -204,8 +204,23 @@ for img, ax in zip(images[:6], axes.flat):
     ax.imshow(img)
     ax.axis('off')
 
-### load test data
+images = [cv2.imread(file) for file in glob('/content/Test64/Test64/*.png')]
 
+### get stimulus attributes
+assets = sorted(glob('/content/Test64/Test64/*.png'))
+df = make_df(assets)
+shapes = np.unique(df.image_shape)
+thetas = np.unique(abs(df.theta))[1:]
+phis = np.unique(abs(df.phi))[1:]
+nshapes, nthetas, nphis = np.size(shapes), np.size(thetas), np.size(phis)
+
+# Commented out IPython magic to ensure Python compatibility.
+# remove stray files before calling dataloader
+# %ls /content/Test64 -a
+!rm -rf /content/Test64/.ipynb_checkpoints/
+# %ls /content/Test64 -a
+
+### load test data
 batch_size = 1
 
 img_transform = transforms.Compose([
@@ -216,24 +231,79 @@ img_transform = transforms.Compose([
 
 data_dir = '/content/Test64'
 dataset = datasets.ImageFolder(data_dir, transform=img_transform)
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
+dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
-### get latent embeddings
-output, latent = [], []
+### get feature maps
+output, latent, count = [], [], 0
 for data in dataloader:
   img, _ = data
+  print(img.size())
   img = img.view(img.size(0), -1)
   img = Variable(img).cuda()
   # forward
-  output.append(model(img).detach().cpu().numpy())
+  output.append(model(img))
   # encoder
-  latent.append(model.encoder(img).detach().cpu().numpy())
+  latent.append(model.encoder(img))
+  pic = to_img(img.cpu().data)
+  save_image(pic, '/content/Test64/true_{}.png'.format(epoch))
+  pic = to_img(model(img).cpu().data)
+  save_image(pic, '/content/Test64/recon_{}.png'.format(epoch))
+  count += 1
 
-### get stimulus attributes
-assets = glob('/content/Test64/Test64/*.png')
-df = make_df(assets)
-shapes = np.unique(df.image_shape)
-thetas = np.unique(abs(df.theta))[1:]
-phis = np.unique(abs(df.phi))[1:]
-nshapes, nthetas, nphis = np.size(shapes), np.size(thetas), np.size(phis)
+feature_maps = [latent[i][0].detach().cpu().numpy() for i in range(len(feature_maps))]
+feature_maps = np.array(feature_maps)
 
+def compute_dist(feature_maps):
+  model_dist = {}
+  activity = feature_maps
+  nstimuli, nfeatures = np.shape(activity)
+  model_dist = np.zeros((nstimuli,nstimuli))
+  for i in range(nstimuli):
+    for j in range(nstimuli):
+      model_dist[i,j] = np.sqrt(((activity[i] - activity[j]) ** 2).sum())
+  return model_dist
+
+def analyse_dist(feature_maps, model_dist):
+  dist_dtheta, dist_dphi = np.zeros((nshapes, nthetas)), np.zeros((nshapes, nphis))
+  for shape in shapes:
+    count = 0
+    for theta in thetas:
+      indx = df.index[(df.image_shape == shape) & (df.phi == 0) & (abs(df.theta) == theta)].to_list()
+      dist_dtheta[shape, count] = model_dist[indx[0],indx[1]]
+      count += 1
+    count = 0
+    for phi in phis:
+      indx = df.index[(df.image_shape == shape) & (df.theta == 0) & (abs(df.phi) == phi)].to_list()
+      dist_dphi[shape, count] = model_dist[indx[0],indx[1]]
+      count += 1
+  return dist_dtheta, dist_dphi
+
+def compute_distcorr(feature_maps, dist_dtheta, dist_dphi):
+  angular_diff = np.expand_dims((2*thetas), axis=1).repeat(10, axis=1)
+  feature_dist = (dist_dtheta.transpose())
+  r, p = stats.pearsonr(angular_diff.flatten(), feature_dist.flatten())
+  return r, p
+
+def plot_distcorr(feature_maps, dist_dtheta, dist_dphi):
+  angular_diff = np.expand_dims((2*thetas), axis=1).repeat(10, axis=1)
+  fig = plt.figure(figsize=(6,6)) 
+  ax = plt.gca()
+  feature_dist = (dist_dtheta.transpose())
+  r, p = stats.pearsonr(angular_diff.flatten(), feature_dist.flatten())
+  sns.regplot(angular_diff.flatten(), feature_dist.flatten(), ax=ax, marker='o', scatter_kws={'s':10}, color='k')
+  ax.text(.05, .8, 'r={:.2f}'.format(r), transform=ax.transAxes, fontsize=16)
+  ax.set(xlim=(0, 180))
+  ax.set(ylim=(0, 45))
+  plt.xticks(np.arange(30,180,30), fontsize=16)
+  plt.yticks(np.arange(10,50,10), fontsize=16)
+  plt.xlabel('Magnitude of rotation ($\deg$)', fontsize=18)
+  plt.ylabel('Distance between latents', fontsize=18)
+  return fig
+
+### analyse feature distance as a function of rotation
+model_dist = compute_dist(feature_maps)
+dist_dtheta, dist_dphi = analyse_dist(feature_maps, model_dist)
+r_dist, p_dist = compute_distcorr(feature_maps, dist_dtheta, dist_dphi)
+p = plot_distcorr(feature_maps, dist_dtheta, dist_dphi)
+
+p.savefig('autoencodercorr.png', dpi=200)
