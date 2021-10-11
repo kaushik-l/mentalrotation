@@ -7,95 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1KIkVNZScbdoIIMygDo50zDtPB3QMUQtc
 """
 
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-import seaborn as sns
-from scipy import stats
-from glob import glob
-from PIL import Image
-from sklearn.decomposition import PCA
-from tqdm.auto import tqdm as tqdm
-import os, sys, pickle
-from plotnine import *
-sys.path.append('..')
-np.random.seed(3)
-import cv2
-
-def make_df(assets):
-  dictlist = []
-  label_counts = {}
-  for asset in assets:
-      imgstr = asset.split('/')[4]
-      shape = int(imgstr[7:9])
-      alpha = float(imgstr[12:15])
-      if imgstr[16:18] == 't1':
-        theta = -float(imgstr[19:22]) / 2
-      elif imgstr[16:18] == 't2':
-        theta = float(imgstr[19:22]) / 2
-      else:
-        theta = 0
-      if imgstr[16:18] == 'p1':
-        phi = -float(imgstr[19:22]) / 2
-      elif imgstr[16:18] == 'p2':
-        phi = float(imgstr[19:22]) / 2
-      else:
-        phi = 0
-      row = {'image_name': imgstr, 'image_shape': shape, 'theta': theta, 'phi': phi}
-      dictlist.append(row)
-  df = pd.DataFrame(dictlist)
-  return df
-
-# Commented out IPython magic to ensure Python compatibility.
- # upload both training and test data
-# %cd /content
-from google.colab import files
-uploaded = files.upload()
-
-# Commented out IPython magic to ensure Python compatibility.
-# %cd /content
-!unzip Train64.zip -d /content/Train64
-!unzip Test64.zip -d /content/Test64
-
-!rm -rf /content/__MACOSX/
-
-# visualize training images
-images = [cv2.imread(file) for file in glob('/content/Train64/Train64/*.png')]
-fig, axes = plt.subplots(2, 3, sharex=True, sharey=True) 
-for img, ax in zip(images[:6], axes.flat):
-    ax.imshow(img)
-    ax.axis('off')
-
-assets = glob('/content/Train64/Train64/*.png')
-df = make_df(assets)
-shapes = np.unique(df.image_shape)
-thetas = np.unique(abs(df.theta))[1:]
-phis = np.unique(abs(df.phi))[1:]
-nshapes, nthetas, nphis = np.size(shapes), np.size(thetas), np.size(phis)
-
-# Commented out IPython magic to ensure Python compatibility.
-# remove stray files before calling dataloader
-# %ls /content/Train64 -a
-!rm -rf /content/Train64/.ipynb_checkpoints/
-
-### load training data
-
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-
-num_epochs = 100
-batch_size = 128
-learning_rate = 1e-3
-
-img_transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Grayscale(num_output_channels=1),
-    transforms.Normalize((0.5), (0.5))
-])
-
-data_dir = '/content/Train64'
-dataset = datasets.ImageFolder(data_dir, transform=img_transform)
-dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 ### define model
 import os
@@ -107,6 +18,10 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
+from matplotlib import pyplot as plt
+import numpy as np
+import seaborn as sns
+
 
 def to_img(x):
     x = 0.5 * (x + 1)
@@ -114,7 +29,12 @@ def to_img(x):
     x = x.view(x.size(0), 1, 64, 64)
     return x
 
-num_epochs = 200
+def R2(x, y):
+    R2_mu = np.mean(1 - (np.mean(((y - x) ** 2).detach().numpy(), axis=1) / (np.var(x.detach().numpy(), axis=1))))
+    R2_std = np.std(1 - (np.mean(((y - x) ** 2).detach().numpy(), axis=1) / (np.var(x.detach().numpy(), axis=1))))
+    return R2_mu, R2_std
+
+num_epochs = 20000
 batch_size = 128
 learning_rate = 1e-3
 
@@ -124,9 +44,10 @@ img_transform = transforms.Compose([
     transforms.Normalize((0.5), (0.5))
 ])
 
-data_dir = '/content/Test64'
+data_dir = r'C:\Users\jkl9\Documents\Data\Mental rotation\Test64'
 dataset = datasets.ImageFolder(data_dir, transform=img_transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
 
 class autoencoder(nn.Module):
     def __init__(self):
@@ -150,8 +71,10 @@ class autoencoder(nn.Module):
         x = self.decoder(x)
         return x
 
+
 ### train model
-model = autoencoder().cuda()
+#model = autoencoder().cuda()
+model = autoencoder()
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(
     model.parameters(), lr=learning_rate, weight_decay=1e-5)
@@ -161,7 +84,7 @@ for epoch in range(num_epochs):
     for data in dataloader:
         img, _ = data
         img = img.view(img.size(0), -1)
-        img = Variable(img).cuda()
+        img = Variable(img)
         # forward
         output = model(img)
         loss = criterion(output, img)
@@ -173,12 +96,13 @@ for epoch in range(num_epochs):
     # print
     print('epoch [{}/{}], loss:{:.4f}'
           .format(epoch + 1, num_epochs, loss.item()))
-    if epoch % 10 == 0:
-      pic = to_img(img.cpu().data)
-      save_image(pic, '/content/Test64/true_{}.png'.format(epoch))
-      pic = to_img(output.cpu().data)
-      save_image(pic, '/content/Test64/recon_{}.png'.format(epoch))
+    if epoch % 1000 == 0:
+      pic = to_img(img.data)
+      save_image(pic, r'C:\Users\jkl9\Documents\Data\Mental rotation\Test64/true_{}.eps'.format(epoch))
+      pic = to_img(output.data)
+      save_image(pic, r'C:\Users\jkl9\Documents\Data\Mental rotation\Test64/recon_{}.eps'.format(epoch))
 
+R2_mu, R2_std = R2(img, output)
 torch.save(model.state_dict(), './sim_autoencoder.pth')
 
 ### plot training loss
@@ -193,31 +117,31 @@ plt.ylabel('Reconstruction Loss', fontsize=18)
 plt.tight_layout()
 loss.show()
 
-loss.savefig('autoencoderloss.png', dpi=200)
+loss.savefig('autoencoderloss.eps', dpi=200)
 
-dataloader.dataset[0][0].size()
+#dataloader.dataset[0][0].size()
 
 # visualize test images
-images = [cv2.imread(file) for file in glob('/content/Test64/Test64/*.png')]
-fig, axes = plt.subplots(2, 3, sharex=True, sharey=True) 
-for img, ax in zip(images[:6], axes.flat):
-    ax.imshow(img)
-    ax.axis('off')
+#images = [cv2.imread(file) for file in glob('/content/Test64/Test64/*.png')]
+#fig, axes = plt.subplots(2, 3, sharex=True, sharey=True)
+#for img, ax in zip(images[:6], axes.flat):
+#    ax.imshow(img)
+#    ax.axis('off')
 
-images = [cv2.imread(file) for file in glob('/content/Test64/Test64/*.png')]
+#images = [cv2.imread(file) for file in glob('/content/Test64/Test64/*.png')]
 
 ### get stimulus attributes
-assets = sorted(glob('/content/Test64/Test64/*.png'))
-df = make_df(assets)
-shapes = np.unique(df.image_shape)
-thetas = np.unique(abs(df.theta))[1:]
-phis = np.unique(abs(df.phi))[1:]
-nshapes, nthetas, nphis = np.size(shapes), np.size(thetas), np.size(phis)
+#assets = sorted(glob('/content/Test64/Test64/*.png'))
+#df = make_df(assets)
+#shapes = np.unique(df.image_shape)
+#thetas = np.unique(abs(df.theta))[1:]
+#phis = np.unique(abs(df.phi))[1:]
+#nshapes, nthetas, nphis = np.size(shapes), np.size(thetas), np.size(phis)
 
 # Commented out IPython magic to ensure Python compatibility.
 # remove stray files before calling dataloader
 # %ls /content/Test64 -a
-!rm -rf /content/Test64/.ipynb_checkpoints/
+#!rm -rf /content/Test64/.ipynb_checkpoints/
 # %ls /content/Test64 -a
 
 ### load test data
@@ -229,8 +153,8 @@ img_transform = transforms.Compose([
     transforms.Normalize((0.5), (0.5))
 ])
 
-data_dir = '/content/Test64'
-dataset = datasets.ImageFolder(data_dir, transform=img_transform)
+#data_dir = '/content/Test64'
+#dataset = datasets.ImageFolder(data_dir, transform=img_transform)
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
 ### get feature maps
@@ -239,18 +163,26 @@ for data in dataloader:
   img, _ = data
   print(img.size())
   img = img.view(img.size(0), -1)
-  img = Variable(img).cuda()
+  img = Variable(img)
   # forward
   output.append(model(img))
   # encoder
   latent.append(model.encoder(img))
-  pic = to_img(img.cpu().data)
-  save_image(pic, '/content/Test64/true_{}.png'.format(epoch))
-  pic = to_img(model(img).cpu().data)
-  save_image(pic, '/content/Test64/recon_{}.png'.format(epoch))
+#  pic = to_img(img.cpu().data)
+#  save_image(pic, '/content/Test64/true_{}.png'.format(epoch))
+#  pic = to_img(model(img).cpu().data)
+#  save_image(pic, '/content/Test64/recon_{}.png'.format(epoch))
   count += 1
 
-feature_maps = [latent[i][0].detach().cpu().numpy() for i in range(len(feature_maps))]
+# distance
+distances = []
+for i in range(200):
+    for j in range(200):
+        if i != j:
+            distances.append(np.linalg.norm(latent[i].detach().numpy() -
+                                            latent[j].detach().numpy()))
+
+feature_maps = [latent[i][0].detach().numpy() for i in range(len(latent))]
 feature_maps = np.array(feature_maps)
 
 def compute_dist(feature_maps):
